@@ -3,6 +3,7 @@
 from .exporter import (
     export_html,
     export_markdown,
+    export_markdown_structured,
     export_text,
 )
 from .object_finder import FoundElement, ObjectFinder
@@ -57,4 +58,5 @@ __all__ = [
     "export_text",
     "export_html",
     "export_markdown",
+    "export_markdown_structured",
 ]

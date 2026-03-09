@@ -19,6 +19,7 @@ __all__ = [
     "export_text",
     "export_html",
     "export_markdown",
+    "export_markdown_structured",
 ]
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,38 @@ def _table_cells_text(tbl: ET.Element) -> list[list[str]]:
 def _find_tables(p: ET.Element) -> list[ET.Element]:
     """Find all ``<hp:tbl>`` elements inside a paragraph's runs."""
     return p.findall(f".//{_HP}tbl")
+
+
+def _local_name(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[1]
+    return tag
+
+
+def _text_from_t(t: ET.Element) -> str:
+    """Return flattened text content inside a ``<hp:t>`` node."""
+    return "".join(t.itertext())
+
+
+def _section_start_page(section: ET.Element) -> int:
+    """Return explicit section start page from ``<hp:startNum page=...>``.
+
+    Falls back to 1 when unavailable or invalid.
+    """
+    sec_pr = section.find(f".//{_HP}secPr")
+    if sec_pr is None:
+        return 1
+    start_num = sec_pr.find(f"{_HP}startNum")
+    if start_num is None:
+        return 1
+    raw = start_num.get("page")
+    if raw is None:
+        return 1
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1
+    return value if value > 0 else 1
 
 
 # ---------------------------------------------------------------------------
@@ -270,3 +303,119 @@ def export_markdown(
         section_parts.append("\n".join(lines).rstrip())
 
     return section_separator.join(section_parts)
+
+
+def export_markdown_structured(
+    source: HwpxDocument | bytes,
+    *,
+    include_tables: bool = True,
+    skip_empty: bool = True,
+    include_page_index: bool = False,
+    paragraph_level_only: bool = False,
+) -> dict[str, str]:
+    """Export document text fragments as Markdown keyed by structural IDs.
+
+    ID format:
+        - default: ``s{section}.p{paragraph}.r{run}``
+        - with page index: ``s{section}.pg{page}.p{paragraph}.r{run}``
+        - table text: ``...tbl{table}.tr{row}.tc{cell}.p{paragraph}.r{run}``
+        - paragraph-level mode: ``s{section}.p{paragraph}``
+
+    Notes:
+        - Indices are 1-based.
+        - Paragraphs are top-level ``<hp:p>`` children of each section.
+        - Table cell content is represented with additional nested coordinates.
+        - ``pg`` is an explicit-break index derived from section ``startNum.page``
+          and paragraph ``pageBreak`` flags. It is not rendered pagination.
+        - Text-node granularity is flattened; each run value combines all of its
+          ``<hp:t>`` descendants.
+        - ``paragraph_level_only=True`` flattens each paragraph's direct run text
+          into one value. Table content remains structured when
+          ``include_tables=True``.
+    """
+    sections = _section_xmls(source)
+    mapping: dict[str, str] = {}
+
+    for s_idx, section_root in enumerate(sections, start=1):
+        paragraphs = _iter_paragraphs(section_root)
+        page_idx = _section_start_page(section_root)
+        for p_idx, paragraph in enumerate(paragraphs, start=1):
+            if p_idx > 1 and paragraph.get("pageBreak") == "1":
+                page_idx += 1
+
+            if include_page_index:
+                base = f"s{s_idx}.pg{page_idx}.p{p_idx}"
+            else:
+                base = f"s{s_idx}.p{p_idx}"
+
+            if paragraph_level_only:
+                parts: list[str] = []
+                for run in paragraph.findall(f"{_HP}run"):
+                    for child in run:
+                        if _local_name(child.tag) == "t":
+                            parts.append(_text_from_t(child))
+                paragraph_text = "".join(parts)
+                if not (skip_empty and paragraph_text == ""):
+                    mapping[base] = paragraph_text
+
+                if include_tables:
+                    for r_idx, run in enumerate(paragraph.findall(f"{_HP}run"), start=1):
+                        tbl_idx = 0
+                        for child in run:
+                            if _local_name(child.tag) != "tbl":
+                                continue
+                            tbl_idx += 1
+                            for tr_idx, tr in enumerate(child.findall(f"{_HP}tr"), start=1):
+                                for tc_idx, tc in enumerate(tr.findall(f"{_HP}tc"), start=1):
+                                    cell_paragraphs = tc.findall(f".//{_HP}p")
+                                    for cp_idx, cp in enumerate(cell_paragraphs, start=1):
+                                        paragraph_parts: list[str] = []
+                                        for cr in cp.findall(f"{_HP}run"):
+                                            paragraph_parts.extend(
+                                                _text_from_t(ct) for ct in cr.findall(f"{_HP}t")
+                                            )
+                                        cell_paragraph_text = "".join(paragraph_parts)
+                                        if skip_empty and cell_paragraph_text == "":
+                                            continue
+                                        key = (
+                                            f"{base}.r{r_idx}"
+                                            f".tbl{tbl_idx}.tr{tr_idx}.tc{tc_idx}"
+                                            f".p{cp_idx}"
+                                        )
+                                        mapping[key] = cell_paragraph_text
+                continue
+
+            for r_idx, run in enumerate(paragraph.findall(f"{_HP}run"), start=1):
+                run_text_parts: list[str] = []
+                tbl_idx = 0
+                for child in run:
+                    tag = _local_name(child.tag)
+                    if tag == "t":
+                        run_text_parts.append(_text_from_t(child))
+                        continue
+
+                    if include_tables and tag == "tbl":
+                        tbl_idx += 1
+                        for tr_idx, tr in enumerate(child.findall(f"{_HP}tr"), start=1):
+                            for tc_idx, tc in enumerate(tr.findall(f"{_HP}tc"), start=1):
+                                cell_paragraphs = tc.findall(f".//{_HP}p")
+                                for cp_idx, cp in enumerate(cell_paragraphs, start=1):
+                                    runs = cp.findall(f"{_HP}run")
+                                    for cr_idx, cr in enumerate(runs, start=1):
+                                        cell_parts = [_text_from_t(ct) for ct in cr.findall(f"{_HP}t")]
+                                        cell_text = "".join(cell_parts)
+                                        if skip_empty and cell_text == "":
+                                            continue
+                                        key = (
+                                            f"{base}.r{r_idx}"
+                                            f".tbl{tbl_idx}.tr{tr_idx}.tc{tc_idx}"
+                                            f".p{cp_idx}.r{cr_idx}"
+                                        )
+                                        mapping[key] = cell_text
+
+                run_text = "".join(run_text_parts)
+                if skip_empty and run_text == "":
+                    continue
+                mapping[f"{base}.r{r_idx}"] = run_text
+
+    return mapping

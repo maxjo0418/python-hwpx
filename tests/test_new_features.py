@@ -21,7 +21,12 @@ from hwpx.oxml.document import (
     _create_line_element,
     _create_rectangle_element,
 )
-from hwpx.tools.exporter import export_html, export_markdown, export_text
+from hwpx.tools.exporter import (
+    export_html,
+    export_markdown,
+    export_markdown_structured,
+    export_text,
+)
 
 
 # =========================================================================
@@ -527,3 +532,58 @@ class TestExporters:
         doc = self._doc_with_content()
         md = doc.export_markdown()
         assert "Hello" in md
+
+    def test_export_markdown_structured_includes_run_and_table_ids(self):
+        doc = self._doc_with_content()
+        mapping = export_markdown_structured(doc)
+
+        hello_key = next(k for k, v in mapping.items() if v == "Hello")
+        end_key = next(k for k, v in mapping.items() if v == "End")
+        a_key = next(k for k, v in mapping.items() if v == "A")
+        b_key = next(k for k, v in mapping.items() if v == "B")
+
+        assert hello_key.startswith("s1.p") and hello_key.endswith(".r1")
+        assert end_key.startswith("s1.p") and end_key.endswith(".r1")
+        assert ".tbl1.tr1.tc1.p1.r1" in a_key
+        assert ".tbl1.tr1.tc2.p1.r1" in b_key
+
+    def test_document_export_markdown_structured_method(self):
+        doc = self._doc_with_content()
+        mapping = doc.export_markdown_structured()
+        assert any(v == "Hello" for v in mapping.values())
+
+    def test_export_markdown_structured_with_explicit_page_index(self):
+        doc = _new_doc()
+        first = doc.add_paragraph("First page")
+        second = doc.add_paragraph("Second page")
+        second.element.set("pageBreak", "1")
+        second.section.mark_dirty()
+
+        mapping = export_markdown_structured(doc, include_page_index=True)
+
+        first_key = next(k for k, v in mapping.items() if v == "First page")
+        second_key = next(k for k, v in mapping.items() if v == "Second page")
+        assert ".pg1." in first_key
+        assert ".pg2." in second_key
+
+    def test_export_markdown_structured_paragraph_level_only_keeps_tables_structured(self):
+        doc = self._doc_with_content()
+        mapping = export_markdown_structured(doc, paragraph_level_only=True)
+
+        assert any(key.count(".r") == 0 for key in mapping)
+        assert any(".tbl" in key for key in mapping)
+        assert any(value == "Hello" for value in mapping.values())
+        assert any(value == "End" for value in mapping.values())
+        assert any(value == "A" for value in mapping.values())
+        a_key = next(k for k, v in mapping.items() if v == "A")
+        assert ".tbl1.tr1.tc1.p1" in a_key
+        assert ".tbl1.tr1.tc1.p1.r" not in a_key
+
+    def test_export_markdown_structured_paragraph_level_only_without_tables(self):
+        doc = self._doc_with_content()
+        mapping = export_markdown_structured(
+            doc,
+            paragraph_level_only=True,
+            include_tables=False,
+        )
+        assert all(".tbl" not in key for key in mapping)

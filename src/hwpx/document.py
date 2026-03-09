@@ -1267,6 +1267,15 @@ class HwpxDocument:
         from .tools.exporter import export_markdown
         return export_markdown(self, **kwargs)  # type: ignore[arg-type]
 
+    def export_markdown_structured(self, **kwargs: object) -> dict[str, str]:
+        """Export content as structural Markdown mapping.
+
+        Keyword args are forwarded to
+        :func:`~hwpx.tools.exporter.export_markdown_structured`.
+        """
+        from .tools.exporter import export_markdown_structured
+        return export_markdown_structured(self, **kwargs)  # type: ignore[arg-type]
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
