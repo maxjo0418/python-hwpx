@@ -1,3 +1,4 @@
 *.hwpx
 *.md
 *.json
+!README.md
